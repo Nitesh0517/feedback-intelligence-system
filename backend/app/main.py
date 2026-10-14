@@ -65,18 +65,24 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 # CORS Configuration
 origins = [str(origin).rstrip("/") for origin in settings.BACKEND_CORS_ORIGINS]
-if settings.ENVIRONMENT == "production" and "*" in origins:
-    logger.warning("Wildcard CORS detected in production; removing wildcard for credential security.")
-    origins = [o for o in origins if o != "*"]
+cors_kwargs = {
+    "allow_credentials": True,
+    "allow_methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "allow_headers": ["*"],
+    "expose_headers": ["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After"],
+}
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins if origins else ["http://localhost:3000", "http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
-    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset", "Retry-After"],
-)
+if settings.ENVIRONMENT == "production":
+    if "*" in origins:
+        logger.warning("Wildcard CORS detected in production; removing wildcard for credential security.")
+        origins = [o for o in origins if o != "*"]
+    cors_kwargs["allow_origins"] = origins if origins else ["http://localhost:3000", "http://localhost:5173"]
+else:
+    # In development, support localhost, 127.0.0.1, and private LAN IP ranges (10.x, 192.168.x, 172.16-31.x)
+    cors_kwargs["allow_origins"] = origins if origins else ["http://localhost:3000", "http://localhost:5173"]
+    cors_kwargs["allow_origin_regex"] = r"^https?://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$"
+
+app.add_middleware(CORSMiddleware, **cors_kwargs)
 
 # Centralized Error Handlers
 app.add_exception_handler(AppBaseException, app_exception_handler)

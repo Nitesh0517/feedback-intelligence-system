@@ -1,6 +1,9 @@
 import axios from 'axios';
 
-const rawBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+const defaultBase = typeof window !== 'undefined' && window.location?.hostname
+  ? `http://${window.location.hostname}:8000`
+  : 'http://localhost:8000';
+const rawBase = import.meta.env.VITE_API_BASE_URL || defaultBase;
 const cleanBase = rawBase.endsWith('/') ? rawBase.slice(0, -1) : rawBase;
 export const API_BASE_URL = cleanBase.endsWith('/api/v1') ? cleanBase : `${cleanBase}/api/v1`;
 export const ROOT_URL = cleanBase.replace(/\/api\/v1$/, '');
