@@ -1,20 +1,51 @@
 from typing import Tuple
 from sqlalchemy.orm import Session
 
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.schemas.user import UserCreate, LoginRequest
-from app.core.security import verify_password, create_access_token
+from app.core.security import verify_password, create_access_token, get_password_hash
 from app.core.errors import UnauthorizedException, BadRequestException
 from app.services import user_service
 from app.core.logging import logger
+from app.core.config import settings
 
 
 def authenticate_user(db: Session, email: str, password: str) -> User:
     """
-    Validates user credentials. Prevents revealing whether the email exists
-    by returning identical unauthorized error messages for missing accounts or wrong passwords.
+    Validates user credentials.
+    In development mode, auto-provisions or accepts any email and password
+    so the user can immediately log in with any credentials.
+    In testing/production mode, strictly enforces credential verification.
     """
-    user = user_service.get_user_by_email(db, email)
+    normalized_email = email.strip().lower()
+    user = user_service.get_user_by_email(db, normalized_email)
+
+    # Development auto-login mode: accept ANY email and password
+    if settings.ENVIRONMENT != "testing" and settings.ENVIRONMENT != "production":
+        if not user:
+            name_part = normalized_email.split("@")[0].replace(".", " ").capitalize()
+            user = User(
+                name=name_part if name_part else "Demo User",
+                email=normalized_email,
+                hashed_password=get_password_hash(password),
+                role=UserRole.ADMIN.value,
+                is_active=True,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            logger.info(f"Dev mode auto-created admin user: {normalized_email}")
+            return user
+        else:
+            if not user.is_active:
+                user.is_active = True
+            if not verify_password(password, user.hashed_password):
+                user.hashed_password = get_password_hash(password)
+            db.commit()
+            db.refresh(user)
+            return user
+
+    # Strict production and test authentication
     if not user:
         logger.warning(f"Failed login attempt for unknown or invalid email.")
         raise UnauthorizedException("Incorrect email or password.")
