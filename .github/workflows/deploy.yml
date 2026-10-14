@@ -1,0 +1,101 @@
+name: Production Deployment (Manual)
+
+# ==============================================================================
+# Manual Deployment Workflow Template
+# NOTE: Requires explicit GitHub Actions authorization and configured repository secrets:
+#   - PRODUCTION_SERVER_HOST
+#   - PRODUCTION_SSH_USER
+#   - PRODUCTION_SSH_PRIVATE_KEY
+# ==============================================================================
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: "Target deployment environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+      run_migrations:
+        description: "Execute database migrations automatically (alembic upgrade head)"
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  pre-deploy-validation:
+    name: Validate Build & Pre-Deploy Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install Backend Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Run Backend Pytest Suite
+        env:
+          DATABASE_URL: sqlite:///./deploy_test.db
+          ENVIRONMENT: testing
+          SECRET_KEY: test-secret-key-for-manual-deploy-validation-32chars
+        run: |
+          pytest backend/tests -v --tb=short
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies & Run Vitest
+        run: |
+          cd frontend
+          npm ci
+          npm test -- --run
+          npm run build
+
+  deploy:
+    name: Execute Production Deployment
+    needs: [pre-deploy-validation]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    environment: ${{ github.event.inputs.target_environment }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Verify Required Secrets
+        run: |
+          if [ -z "${{ secrets.PRODUCTION_SERVER_HOST }}" ]; then
+            echo "::error::PRODUCTION_SERVER_HOST secret is not configured in GitHub repository settings."
+            exit 1
+          fi
+          echo "Deployment secrets validated successfully."
+
+      - name: Deploy via SSH (Blueprint)
+        uses: appleboy/ssh-action@v1.0.3
+        if: ${{ secrets.PRODUCTION_SERVER_HOST != '' }}
+        with:
+          host: ${{ secrets.PRODUCTION_SERVER_HOST }}
+          username: ${{ secrets.PRODUCTION_SSH_USER }}
+          key: ${{ secrets.PRODUCTION_SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/feedback-intelligence-system
+            git pull origin main
+            if [ "${{ github.event.inputs.run_migrations }}" = "true" ]; then
+              docker compose exec -T backend alembic upgrade head
+            fi
+            docker compose -f docker-compose.yml -f deployment/docker-compose.prod.yml up -d --build
